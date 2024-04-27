@@ -1,0 +1,204 @@
+---
+title: "Assess 1"
+author: "Jodie"
+date: "2024-04-17"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+General question: In this randomized study, what is the effect of the drug on elevated potassium levels (i.e. hyperkalemia)?
+ 
+ 
+Data sets:
+1.     t05xc: Adverse event data
+2.     t016: Lab test data
+3.     master_data: Master database for clinical trial
+ 
+Notes:
+1.     Hyperkalemia is defined as any potassium value >=5.5
+2.     Potassium values are recorded in the column labeled “k” in both the adverse event data set and the lab test data set.
+3.     Each patient may have multiple potassium values recorded. We are interested in whether each patient EVER experienced hyperkalemia. Assume that if no potassium values are available, then hyperkalemia was not present.
+4.     Patients are identified by “master_id” in each of the data sets.
+5.     Each patient’s treatment assignment is identified by “treat” (0 for placebo; 1 for drug) in the master data set.
+6.     Geographic region is identified by “region” in the master data set.
+ 
+Questions:
+1.     Is there evidence that the drug is associated with hyperkalemia?
+2.     Does the drug effect depend on geographic region?
+ 
+
+
+Further questions:
+after concluding there is an association, how to identify the relationship--try doing regression analysis?
+What test to answer--does the drug effect depend on geographic region?
+
+####     Is there evidence that the drug is associated with hyperkalemia?
+
+Primary approach: 
+Do hypothesis test to see if there significant difference between drug group and placebo group -> chi sq test of independence (essentially a log linear model)
+Do logistic regression on the drug, with a random intercept terms for the patient and for the geographic region. Regress against hyperkalemia as label
+In other words, response variable is hyperkalemia and feature 
+
+#### Create a new column--overall_hyperk and join dataframes to create a single dataframe that has all variables of interest "treat", "region", "master_id", "overall_hyperk"
+
+```{r}
+# join dataframe by master_id
+
+# test that looks at 
+# assuming all other variables are held constant
+# do hypothesis test to see if there significant difference between drug group and placebo group -> chi sq test of independence 
+## H0: no difference in proportion between groups; Ha: there is difference between groups; if p-val < 0.05, reject H0 and can claim 
+# there hyperkalmeia is associated with presence of drug
+
+# create table
+# 1. create two subsets of data--> 1 for drug and 0 for no drug
+# 2. calculate num of patients who experienced hyperkalemia in each group
+
+# manipulating dataframe
+library(dplyr)
+library(tidyr)
+master <- read.csv("/Users/jojoc/Downloads/Data specialist assessment/Assignment No 1/master_data.csv")
+adverse.df <- read.csv("/Users/jojoc/Downloads/Data specialist assessment/Assignment No 1/t016.csv") 
+lab.df <- read.csv("/Users/jojoc/Downloads/Data specialist assessment/Assignment No 1/t05xc.csv")
+
+#head(master)
+#head(adverse.df)
+#tail(lab.df)
+
+#table(lab.df$test_type)
+lab.df$test_type <- tolower(lab.df$test_type)
+#lab.df
+
+# revise lab df
+
+# select only rows with "pota" or "k" in test_type col for lab.df using regular expression --> to include only potassium tests results
+sel_lab_ <- lab.df[grepl("pota|k", lab.df$test_type, ignore.case = TRUE), ]
+#sel_lab_# updated lab df to contain only potassium tests, need to aggregate by patient later to assign 0 or 1 to has_hyperk
+
+# aggregate by master_id to check if at least one k is >= 5.5; if so assign 1 (true) to has_hyperk col
+sel_lab_2 <- sel_lab_ %>%
+  mutate(k = replace_na(k, 0)) %>%
+  group_by(master_id) %>%
+  summarize(has_hyperk = any(k >= 5.5)) %>%
+  mutate(has_hyperk_num = as.numeric(has_hyperk))
+
+
+#sel_lab_2 # most updated lab
+#sel_lab_
+
+# revise master to contain treat and drug
+rev_master <- master[, c("master_id", "treat", "region")] # only one occurrence for each patient 
+                                                          # as determined doing table()
+#rev_master # most updated master
+unique(rev_master$region) # region 1 or 2
+
+# revise adverse events df to also have has_hyperk col
+adverse.df2 <- adverse.df %>%
+  select(master_id, k) %>%
+  mutate(k = replace_na(k, 0)) %>% # replace na's with 0
+  group_by(master_id) %>%
+  summarize(has_hyperk = any(k >= 5.5)) %>%
+  mutate(has_hyperk_num = as.numeric(has_hyperk))
+  
+# most updated dataframes are sel_lab_2, rev_master, and adverse.df2
+head(rev_master)
+head(sel_lab_2)
+head(adverse.df2)
+
+# might be some overlaps between sel_lab_2 and adverse.df2--
+# assuming that that there are patients in both dataframes,
+# if has hyperk is true in adverse.df2 but false in sel_lab_2, mark as true overall for has_hyperk
+sel_lab_adverse <- rbind(sel_lab_2, adverse.df2)
+sel_lab_adverse
+
+sel_lab_adverse2 <- sel_lab_adverse %>%
+  group_by(master_id) %>%
+  summarize(overall_has_hyperk = any(has_hyperk_num==1)) %>%
+   mutate(overall_hyperk = as.numeric(overall_has_hyperk))
+
+dim(sel_lab_adverse2) # final joint data frame created by joining sel_lab_2 and adverse.df2
+dim(rev_master)
+
+# join sel_lab_adverse2 and rev_master by master_id
+
+# include all=TRUE to include patients that only appear in one of the two dfs being merged
+final_df <- merge(sel_lab_adverse2, rev_master, by = "master_id")
+head(final_df) # 3446 entries (when all=TRUE), otherwise 3,436 when all is false 
+
+
+
+```
+
+#### To answer Q1, logistic regression on the treat and region and regress against overall_hyperk as label.
+
+```{r}
+is.factor(final_df$region) # check if this column has levels, currently not so convert 
+final_df$overall_hyperk <- as.factor(final_df$overall_hyperk)
+final_df$treat <- as.factor(final_df$treat)
+final_df$region <- as.factor(final_df$region) # making them factors might not make diference since each variable has two levels
+
+# m1 <- glm(overall_hyperk ~ treat, data = final_df, family = binomial)
+# summary(m1)
+```
+
+```{r}
+m1_2 <- glm(overall_hyperk ~ treat + region, data = final_df, family = binomial)
+summary(m1_2)
+levels(final_df$treat) # inrepretreting the multiplicative change of odds in favor of y=1 as patient goes from no drug to drug effect
+chisq.test(table(final_df$overall_hyperk, final_df$treat))
+
+```
+
+Drug effect is significantly associated with presence of hyperkalemia as indicated by the chi-squared test. The estimate for treat is 0.83868 (significant as it its p-value < 0.05). For patients on drugs, the odds of developing hyperkalemia is multiplied by a factor of exp(0.83868) = 2.31 compared to patients not on drugs. In other words, the odds of developing hyperkalmeia when on drugs are 2.31 times the odds for when one is not on drugs. Another way of interpreting this is, the probability of developing hyperkalemia are (2.31 - 1) x 100 = 131% higher when on drugs comprared to not being on drugs.
+
+
+#### To answer Q2, add an interaction term (treatment*region) to the model and compare with m1_2 (without the interaction term)
+
+```{r}
+m2 <- glm(overall_hyperk ~ treat*region + treat + region, data = final_df, family = binomial)
+summary(m2)
+```
+
+
+If drug effect or treatment depends on region, we expect the model with the interaction term to fit our data better and is therefore the better model. To compare the models, we can use AIC which is included in the summary output. AIC tells you which model has better out of sample prediction accuracy. The better model will have a lower AIC. In this case, the model with the interaction term has lower AIC. 2657.5 < 2677.1. Therefore, our model with the drug and region interaction term does better and drug depends on region. I considered computing the leave one cross validation to compare the two models but AIC for regression models is a sufficient approximation. It would be computationally expensive since I would need to fit the model once for each data point.
+
+```{r}
+#coef(m2) # table that shows the slopes essitimates and intercept
+coef(m2)
+table_matrix <- matrix(NA, nrow = 2, ncol = 2)
+
+# Fill in the table with the calculated values
+table_matrix[1, 1] <- exp(coef(m2)[1]) # -2.34  and raising that to e
+table_matrix[1, 2] <- exp(coef(m2)[1] + coef(m2)[3]) # -2.34 + 0.08 and raising that to e
+table_matrix[2, 1] <- exp(coef(m2)[1] + coef(m2)[2]) #  -2.34 + 1.25 and raising that to e
+table_matrix[2, 2] <- exp(coef(m2)[1] + coef(m2)[3] + coef(m2)[2] + coef(m2)[4]) # -2.34 + 0.08 - 0.99 and raising that to e
+
+# Convert the matrix to a data frame for better visualization
+table_df <- as.data.frame(table_matrix)
+rownames(table_df) <- c("treat0", "treat1")
+colnames(table_df) <- c("region1", "region2")
+
+table_df
+
+```
+
+This table represents the odds of getting hyperkalemia based on whether the patients are on drugs and what region they come from. From the table, you can see the odds are highest for patient on drugs and from region 1. For region 1, the treatment effect is 1.25. For region 2 the treatment effect is 1.25 - 0.99 = 0.26. Therefore there is a stronger association between drugs and getting hyperkalemia for patients from region 1.
+
+ 
+#### Another way to answer Q2, compute the CI for the interaction term
+
+```{r}
+# table_matrix <- matrix(NA, nrow = 2, ncol = 2)
+# 
+# # Fill in the table with the calculated values
+# table_matrix[1, 1] <- exp(coef(m2)[1]) # -2.34  and raising that to e
+# table_matrix[1, 2] <- exp(coef(m2)[1] + coef(m2)[2]) # -2.34 + 0.08 and raising that to e
+# table_matrix[2, 1] <- exp(coef(m2)[1] + coef(m2)[3]) #  -2.34 + 1.25 and raising that to e
+# table_matrix[2, 2] <- exp(coef(m2)[1] + coef(m2)[2] + coef(m2)[3] + coef(m2)[4]) # -2.34 + 0.08 - 0.99 and raising that to e
+# 
+# # Convert the matrix to a data frame for better visualization
+# table_df <- as.data.frame(table_matrix)
+# rownames(table_df) <- c("treat0", "treat1")
+# colnames(table_df) <- c("region1", "region2")
+```
